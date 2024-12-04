@@ -176,25 +176,40 @@ OUT */
     """
 
     program_scratch = """
+        func compute(x) {
+    print("Computing for x=", x);
+    return x * 2;
+}
+
 func main() {
- print(catalan(4));
+    var a; var b; var c; var d;
+    a = compute(3);        /* Deferred computation */
+    b = a + compute(4);    /* Nested lazily deferred computation */
+    c = b + a;             /* Cached value of a reused */
+    d = c + compute(5);    /* Another deferred computation */
+    print("Result:");
+    print(d);              /* Triggers evaluation of all deferred expressions */
 }
+    """
 
-func catalan(n) {
-	return catalan_help(n, 0, 0);
+    program_scratch_2 = """
+    func f() {
+print("PROC");
+var x;
+x = 5;
+return x + 1;
 }
-
-func catalan_help(n, ans, j) {
- if (n < 2) {
-  return 1;
- } else {
-  for (j = j;j < n; j = j + 1) {
-   ans = ans + catalan(j) * catalan(n - j - 1);
-  }
-  return ans;
- }
+func main() {
+	var y;
+	y = f();
+	print(y);
 }
     """
 
     interpreter = Interpreter()
     interpreter.run(program_scratch)
+    # test = interpreter.Thunk(6, interpreter, {}, True)
+    # print(type(test) is bool)
+    # # test2 = interpreter.Thunk(False, interpreter, {}, True)
+    # # print(-test)
+    # interpreter.run(program_scratch)
