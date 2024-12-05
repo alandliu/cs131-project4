@@ -176,38 +176,26 @@ OUT */
     """
 
     program_scratch = """
-       func foo() {
-  print("F1");
-  raise "except1";
-  print("F3");
-}
-
-func bar() {
- try {
-   print("B1");
-   foo();
-   print("B2");
- }
- catch "except2" {
-   print("B3");
- }
- print("B4");
+func delta() {
+  try {
+    raise "m";
+  }
+  catch "n" {
+    print("n");
+  }
+  print("delta done");
 }
 
 func main() {
- try {
-   print("M1");
-   bar();
-   print("M2");
- }
- catch "except1" {
-   print("M3");
- }
- catch "except3" {
-   print("M4");
- }
- print("M5");
+  try {
+    delta();
+    print("done");
+  }
+  catch "m" {
+    print("m caught");
+  }
 }
+
     """
 
     interpreter = Interpreter()

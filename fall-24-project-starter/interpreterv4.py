@@ -1,7 +1,5 @@
 from intbase import InterpreterBase, ErrorType
 from brewparse import parse_program
-import copy
-import sys # TODO: REMOVE REMOVE REMOVE
 
 class Interpreter(InterpreterBase):
     def __init__(self, console_output=True, inp=None, trace_output=False):
@@ -13,7 +11,7 @@ class Interpreter(InterpreterBase):
         def __init__(self, value, interpreter, scopes, evaluated = None, captured_vars = None):
             self.evaluated = True
             self.interpreter = interpreter
-            self.scopes = copy.deepcopy(scopes) # The scope in which the thunk was declared. it is a reference to the scope
+            self.scopes = [{key: value for key, value in d.items()} for d in scopes] # The scope in which the thunk was declared. it is a reference to the scope
             if evaluated == None or not evaluated:
                 self.evaluated = False
             self.value = value
@@ -326,6 +324,9 @@ class Interpreter(InterpreterBase):
         condition_result = self.Thunk(None, self, scopes, True)
         condition_node = if_node.dict['condition']
         condition_result = self.evaluate_conditional(condition_node, scopes)
+
+        if self.is_excepted:
+            return self.Thunk(None, self, scopes, True)
         new_scopes = scopes + [dict()]
         if condition_result: 
             ret = self.run_body(if_node.dict['statements'], new_scopes)
@@ -343,6 +344,9 @@ class Interpreter(InterpreterBase):
         self.do_assignment(for_node.dict['init'], scopes)
         condition_node = for_node.dict['condition']
         condition_eval = self.evaluate_conditional(condition_node, scopes)
+        if self.is_excepted:
+            return self.Thunk(None, self, scopes, True)
+         
         while condition_eval:
             new_scope = scopes + [dict()]
             ret = self.run_body(for_node.dict['statements'], new_scope)
@@ -569,6 +573,11 @@ class Interpreter(InterpreterBase):
             condition_eval = self.evaluate_value(condition_node, scopes)
         elif condition_type in self.bool_ops or condition_type in self.comparison_ops:
             condition_eval = self.evaluate_expression(condition_node, scopes)
+        elif condition_type == self.FCALL_NODE:
+            condition_eval = self.do_call(condition_node, scopes)
+
+        if self.is_excepted:
+            return self.Thunk(None, self, scopes, True)
 
         if not self.check_boolean(condition_eval):
             super().error(
@@ -631,6 +640,7 @@ class Interpreter(InterpreterBase):
                 output = self.evaluate_value(prompt[0], scopes)
             elif prompt[0].elem_type == self.VAR_NODE:
                 output = self.evaluate_variable_node(prompt[0], scopes)
+                print(self.is_excepted)
             if self.is_excepted:
                 return self.Thunk(None, self, scopes, True)
             super().output(output.value)
