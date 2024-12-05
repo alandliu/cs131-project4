@@ -176,40 +176,39 @@ OUT */
     """
 
     program_scratch = """
-        func compute(x) {
-    print("Computing for x=", x);
-    return x * 2;
+       func foo() {
+  print("F1");
+  raise "except1";
+  print("F3");
+}
+
+func bar() {
+ try {
+   print("B1");
+   foo();
+   print("B2");
+ }
+ catch "except2" {
+   print("B3");
+ }
+ print("B4");
 }
 
 func main() {
-    var a; var b; var c; var d;
-    a = compute(3);        /* Deferred computation */
-    b = a + compute(4);    /* Nested lazily deferred computation */
-    c = b + a;             /* Cached value of a reused */
-    d = c + compute(5);    /* Another deferred computation */
-    print("Result:");
-    print(d);              /* Triggers evaluation of all deferred expressions */
-}
-    """
-
-    program_scratch_2 = """
-    func f() {
-print("PROC");
-var x;
-x = 5;
-return x + 1;
-}
-func main() {
-	var y;
-	y = f();
-	print(y);
+ try {
+   print("M1");
+   bar();
+   print("M2");
+ }
+ catch "except1" {
+   print("M3");
+ }
+ catch "except3" {
+   print("M4");
+ }
+ print("M5");
 }
     """
 
     interpreter = Interpreter()
     interpreter.run(program_scratch)
-    # test = interpreter.Thunk(6, interpreter, {}, True)
-    # print(type(test) is bool)
-    # # test2 = interpreter.Thunk(False, interpreter, {}, True)
-    # # print(-test)
-    # interpreter.run(program_scratch)

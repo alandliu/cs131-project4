@@ -10,36 +10,30 @@ class Interpreter(InterpreterBase):
 
 
     class Thunk:
-        def __init__(self, value, interpreter, scopes, evaluated = None):
+        def __init__(self, value, interpreter, scopes, evaluated = None, captured_vars = None):
             self.evaluated = True
             self.interpreter = interpreter
-            self.scopes = scopes # The scope in which the thunk was declared
+            self.scopes = copy.deepcopy(scopes) # The scope in which the thunk was declared. it is a reference to the scope
             if evaluated == None or not evaluated:
                 self.evaluated = False
             self.value = value
+            self.captured_vars = captured_vars or {}
         
-        def evaluate(self):
+        def get_val(self):
             if self.evaluated:
-                return
+                return self
             if self.value.elem_type in self.interpreter.arithmetic_ops or self.value.elem_type in self.interpreter.comparison_ops or self.value.elem_type in self.interpreter.bool_ops:
                 self.value = self.interpreter.evaluate_expression(self.value, self.scopes).value
-                self.evaluated = True
             elif self.value.elem_type == self.interpreter.FCALL_NODE:
                 ret_thunk, self.scopes = self.interpreter.do_call(self.value, self.scopes)
                 self.value = ret_thunk.value
                 cur_type = type(self.value)
-                if cur_type is not int and cur_type is not bool and cur_type is not str:
-                    self.evaluate()
-                else:
-                    self.evaluated = True
-
+                if cur_type is not int and cur_type is not bool and cur_type is not str and self.value is not None:
+                    return self.get_val()
             else:
                 self.value = self.interpreter.evaluate_variable_node(self.value, self.scopes).value
-                self.evaluated = True
-            return
-        
-        def get_val(self):
-            self.evaluate()
+
+            self.evaluated = True
             return self
         
         def has_evaluated(self):
@@ -123,7 +117,18 @@ class Interpreter(InterpreterBase):
         self.comparison_ops = ['<', '>', '<=', '>=', '==', '!=']
         self.bool_ops = ['&&', '||', '!']
         main_func_node = self.get_main_func_node(self.ast)
+
+        # Exception Handling
+        self.raised_exception = None
+        self.is_excepted = False
+
+        self.t = 0
         self.run_func(main_func_node, self.global_scope)
+        if self.is_excepted:
+            super().error(
+                ErrorType.FAULT_ERROR,
+                f"Uncaught exception: {self.raised_exception.value}"
+            )
     
     def run_func(self, func_node, scopes):
         if self.trace_output:
@@ -131,7 +136,7 @@ class Interpreter(InterpreterBase):
             print(scopes)
         for statement in func_node.dict['statements']:
             ret = self.run_statement(statement, scopes)
-            if ret or statement.elem_type == self.RETURN_NODE:
+            if ret or statement.elem_type == self.RETURN_NODE or self.is_excepted:
                 return
         return
     
@@ -153,12 +158,18 @@ class Interpreter(InterpreterBase):
             ret = self.do_for(statement_node, scopes)
         elif elem_type == self.RETURN_NODE:
             ret = self.do_return(statement_node, scopes)
+        elif elem_type == self.RAISE_NODE:
+            ret = self.do_raise(statement_node, scopes)
+        elif elem_type == self.TRY_NODE:
+            ret = self.do_try(statement_node, scopes)
         return ret
     
     def run_body(self, statements, scopes):
         if statements == None:
             return self.Thunk(False, self, scopes, True)
         for statement in statements:
+            if self.is_excepted:
+                return self.Thunk(True, self, scopes, True)
             ret = self.run_statement(statement, scopes)
             if ret or statement.elem_type == self.RETURN_NODE:
                 return self.Thunk(True, self, scopes, True)
@@ -167,6 +178,53 @@ class Interpreter(InterpreterBase):
     #####################################################################
     # statement behaviors
     #####################################################################
+
+    def do_raise(self, statement_node, scopes):
+        exception_statement = statement_node.dict['exception_type']
+        exception_type = exception_statement.elem_type
+        exception_value = self.Thunk("", self, scopes, True)
+        if exception_type in (self.arithmetic_ops + self.bool_ops + self.comparison_ops):
+            exception_value = self.evaluate_expression(exception_statement, scopes)
+        elif exception_type in self.val_types:
+            exception_value = self.evaluate_value(exception_statement, scopes)
+        elif exception_type == self.VAR_NODE:
+            exception_value = self.evaluate_variable_node(exception_statement, scopes)
+        if exception_value.get_type() is not str:
+            super().error(
+                ErrorType.TYPE_ERROR,
+                f"Raised exception is not of type String"
+            )
+        self.raised_exception = exception_value
+        self.is_excepted = True
+        return self.Thunk(True, self, scopes, True)
+    
+    def do_try(self, statement_node, scopes):
+        statements = statement_node.dict['statements']
+        ret = self.Thunk(False, self, scopes, True)
+        if self.is_excepted:
+                return self.process_catches(statement_node.dict['catchers'], scopes)
+        for statement in statements:
+            self.run_statement(statement, scopes)
+            if self.is_excepted:
+                return self.process_catches(statement_node.dict['catchers'], scopes)
+        return ret
+    
+    def process_catches(self, catch_nodes, scopes):
+        for catch_node in catch_nodes:
+            catch_except_type = self.Thunk(catch_node.dict['exception_type'], self, scopes, True)
+            if catch_except_type == self.raised_exception:
+                self.is_excepted = False
+                self.raised_exception = None
+                ret = self.do_catch(catch_node, scopes)
+                return ret
+        if self.is_excepted:
+            return self.Thunk(True, self, scopes, True)
+
+    
+    def do_catch(self, catch_node, scopes):
+        statements = catch_node.dict['statements']
+        ret = self.run_body(statements, scopes)
+        return ret  # True if returned/excepted early
     
     def do_definition(self, statement_node, scopes):
         if self.trace_output:
@@ -211,7 +269,7 @@ class Interpreter(InterpreterBase):
         else: # FCALL
             result = self.Thunk(expression, self, scopes, False)
 
-        ref_scope[var_name] = copy.deepcopy(result)
+        ref_scope[var_name] = result
         return
     
     def do_call(self, statement_node, scopes):
@@ -222,11 +280,11 @@ class Interpreter(InterpreterBase):
 
         if fcall_name == 'print':
             self.fcall_print(statement_node.dict['args'], scopes)
-            return
+            return self.Thunk(None, self, scopes, True), scopes
         elif fcall_name == 'inputi':
-            return self.fcall_inputi(scopes, statement_node.dict['args'])
+            return self.fcall_inputi(scopes, statement_node.dict['args']), scopes
         elif fcall_name == 'inputs':
-            return self.fcall_inputs(scopes, statement_node.dict['args'])
+            return self.fcall_inputs(scopes, statement_node.dict['args']), scopes
         
         
         fcall_dict_key = fcall_name + '_' + str(len(statement_node.dict['args']))
@@ -244,7 +302,7 @@ class Interpreter(InterpreterBase):
         fcall_arg_name_list = self.func_defs_to_node[dict_key].dict['args']
         fcall_arg_list = func_node.dict['args']
         new_scope = dict()
-        new_scope['ret'] = None
+        new_scope['ret'] = self.Thunk(None, self, scopes, True)
         for i in range(len(fcall_arg_list)):
             cur_arg_node = fcall_arg_list[i]
             arg = self.Thunk(None, self, scopes, True)
@@ -324,6 +382,9 @@ class Interpreter(InterpreterBase):
         elem_1 = expression_node.dict['op1']
         operand_1 = self.evaluate_operand(elem_1, scopes).get_val()
 
+        if self.is_excepted:
+            return self.Thunk(None, self, scopes, True)
+        
         if elem_type == self.NEG_NODE:
             if operand_1.get_type() is not int:
                 super().error(
@@ -338,9 +399,29 @@ class Interpreter(InterpreterBase):
                     f"Incompatible type for ! operation"
                 )
             return operand_1.logical_not()
+        elif elem_type == '&&':
+            if operand_1.get_type() is not bool:
+                super().error(
+                    ErrorType.TYPE_ERROR,
+                    f"Incompatible type for && operation"
+                )
+            if operand_1.value == False:
+                return Interpreter.Thunk(False, self, scopes, True)
+        elif elem_type == '||':
+            if operand_1.get_type() is not bool:
+                super().error(
+                    ErrorType.TYPE_ERROR,
+                    f"Incompatible type for && operation"
+                )
+            if operand_1.value == True:
+                return Interpreter.Thunk(True, self, scopes, True)
+            
         
         elem_2 = expression_node.dict['op2']
         operand_2 = self.evaluate_operand(elem_2, scopes).get_val()
+
+        if self.is_excepted:
+            return self.Thunk(None, self, scopes, True)
 
         if elem_type == '+':
             if operand_1.get_type() is operand_2.get_type() and operand_1.get_type() is not bool:
@@ -362,6 +443,10 @@ class Interpreter(InterpreterBase):
                     ErrorType.TYPE_ERROR,
                     f"Cannot use operator / on non-integer operators"
                 )
+            if operand_2.value == 0:
+                self.is_excepted = True
+                self.raised_exception = self.Thunk("div0", self, scopes, True)
+                return self.Thunk(None, self, scopes, True)
             return int(operand_1 // operand_2)
         elif elem_type == '*':
             self.type_check(operand_1, operand_2, elem_type)
@@ -415,6 +500,7 @@ class Interpreter(InterpreterBase):
             print("Running retrieval: " + var_node.dict['name'])
             print(scopes)
         var_name = var_node.dict['name']
+
         for scope in reversed(scopes):
             if var_name in scope:
                 return scope[var_name].get_val()
@@ -503,6 +589,8 @@ class Interpreter(InterpreterBase):
         for arg in args:
             if arg.elem_type == self.VAR_NODE:
                 res = self.evaluate_variable_node(arg, scopes)
+                if self.is_excepted:
+                    return self.Thunk(None, self, scopes, True)
                 if res.get_type() is bool:
                     output += self.fcall_print_bool_helper(res)
                 else:
@@ -518,13 +606,13 @@ class Interpreter(InterpreterBase):
                 output += self.fcall_print_bool_helper(arg.dict['val'])
             elif arg.elem_type == self.FCALL_NODE:
                 res = self.do_call(arg, scopes)[0]
+                if self.is_excepted:
+                    return self.Thunk(None, self, scopes, True)
                 if res.get_type() is bool:
                     output += self.fcall_print_bool_helper(res)
                 else:
                     output += str(res.get_val().value)
         super().output(output)
-        print("OUTING")
-        print(scopes)
         return self.Thunk(None, self, scopes, True)
     
     def fcall_inputi(self, scopes, prompt = None):
@@ -538,8 +626,16 @@ class Interpreter(InterpreterBase):
                 f"No inputi() function found that takes > 1 parameter",
             )
         elif len(prompt) > 0:
-            super().output(self.evaluate_value(prompt[0], scopes))
-        return self.Thunk(int(super().get_input()), self, scopes, True)
+            output = ""
+            if prompt[0].elem_type in self.val_types:
+                output = self.evaluate_value(prompt[0], scopes)
+            elif prompt[0].elem_type == self.VAR_NODE:
+                output = self.evaluate_variable_node(prompt[0], scopes)
+            if self.is_excepted:
+                return self.Thunk(None, self, scopes, True)
+            super().output(output.value)
+        val = super().get_input()
+        return self.Thunk(int(val), self, scopes, True)
 
     def fcall_inputs(self, scopes, prompt = None):
         if self.trace_output:
@@ -552,8 +648,16 @@ class Interpreter(InterpreterBase):
                 f"No inputs() function found that takes > 1 parameter",
             )
         elif len(prompt) > 0:
-            super().output(self.evaluate_value(prompt[0], scopes))
-        return self.Thunk(str(super().get_input()), self, scopes, True)
+            output = ""
+            if prompt[0].elem_type in self.val_types:
+                output = self.evaluate_value(prompt[0], scopes)
+            elif prompt[0].elem_type == self.VAR_NODE:
+                output = self.evaluate_variable_node(prompt[0], scopes)
+            if self.is_excepted:
+                return self.Thunk(None, self, scopes, True)
+            super().output(output.value)
+        val = super().get_input()
+        return self.Thunk(str(val), self, scopes, True)
 
 
     #####################################################################
